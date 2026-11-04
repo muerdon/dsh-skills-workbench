@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "title": "Skills Workbench",
+    "description": "Launch any skill into the current session composer, browse by category, uninstall to a restorable trash, and keep skill directories in sync."
+  },
+  "title": "Skills Workbench",
+  "subtitle": "Launch any skill into the current session with one click, no slash typing.",
+  "launch": "Launch",
+  "uninstall": "Uninstall",
+  "rescan": "Scan now",
+  "syncing": "Auto-sync",
+  "lastScan": "Last scan",
+  "empty": "No skills match",
+  "scoring": "Scoring policy"
+}
