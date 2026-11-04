@@ -68,3 +68,7 @@ plugin_manager install_bundle target=<本目录绝对路径>
 ```bash
 sha256sum -c SHA256SUMS.txt
 ```
+
+## 许可
+
+MIT License，版权归 **穆咚**（完整条款见同目录 `LICENSE`）。可自由使用、修改、分发与商用，保留版权声明即可。

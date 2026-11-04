@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "技能工作台：技能唤起面板 + 落地目录主动同步（Skill launcher panel with live directory sync）",
+  "license": "MIT",
+  "author": "穆咚",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
