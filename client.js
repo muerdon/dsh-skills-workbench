@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-skills-workbench',
+  id: 'dsh-skills-workbench',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -251,11 +251,11 @@ window.__ModuleLoader__.load({
 
     /* 样式注入放在 apply 内（factory 保持无副作用），返回清理函数。 */
     function installStyles() {
-      const existing = document.querySelector('style[data-plugin-css="@local/dsh-skills-workbench"]');
+      const existing = document.querySelector('style[data-plugin-css="dsh-skills-workbench"]');
       if (existing !== null) return () => {};
       const style = document.createElement('style');
-      style.dataset.plugin = '@local/dsh-skills-workbench';
-      style.dataset.pluginCss = '@local/dsh-skills-workbench';
+      style.dataset.plugin = 'dsh-skills-workbench';
+      style.dataset.pluginCss = 'dsh-skills-workbench';
       style.textContent = css;
       document.head.appendChild(style);
       return () => { try { style.remove(); } catch { /* ignore */ } };

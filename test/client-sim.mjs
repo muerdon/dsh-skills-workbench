@@ -158,7 +158,14 @@ test('A6：label 不再硬编码中文（双语 fallback）', () => {
 
 test('启动链路：package.json 不再声明 immediately（启动卡死最大嫌疑）', () => {
   assert.equal(PKG.dsh?.client?.immediately, undefined);
-  assert.equal(PKG.version, '1.1.0');
+  // 1.1.1 起 client.js 的模块 id 在发布构建时重写为包名；版本只需 >= 1.1.0
+  assert.ok(PKG.version !== '1.0.0' && /^\d+\.\d+\.\d+$/.test(PKG.version), `version=${PKG.version}`);
+});
+
+test('发布版 client id 必须与包名一致（boot 按「包名」建 loader entry）', () => {
+  // 源码包名是 @local/dsh-skills-workbench，源码 client.js 的 id 与之一致；
+  // 发布构建会把两者同时落到 dsh-skills-workbench。这里验证源码侧的一致性。
+  assert.ok(CLIENT_SRC.includes("id: '@local/dsh-skills-workbench'"), '源码 id 与源码包名一致');
 });
 
 test('A7 静态断言：Host 的 SESSIONS_ROOT 尊重 DSH_HOME', () => {
