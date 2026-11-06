@@ -143,6 +143,10 @@ window.__ModuleLoader__.load({
 .sw-detail .row{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:6px}
 .sw-detail select{font:inherit;font-size:11.5px;padding:4px 7px;border-radius:7px;border:1px solid var(--sw-line2);
   background:rgba(255,253,249,.9);color:var(--sw-ink)}
+/* 服务状态横幅（服务未就绪 / 监听降级） */
+.sw-banner{margin-top:12px;padding:9px 13px;border-radius:11px;font-size:12px;font-weight:600;line-height:1.5;
+  border:1px solid rgba(196,120,106,.42);background:rgba(212,150,136,.14);color:var(--sw-ink)}
+.sw-banner[data-t="warn"]{border-color:rgba(214,186,96,.46);background:rgba(230,206,120,.14)}
 /* 详情卡内的「整段字段」与评分维度 */
 .sw-d-full{margin-top:9px}
 .sw-d-full:first-child{margin-top:0}
@@ -340,6 +344,11 @@ window.__ModuleLoader__.load({
         headers: { 'content-type': 'application/json', 'x-skills-workbench': '1' },
         body: JSON.stringify(body ?? {}),
       });
+      // 审计 A10：HTTP 4xx/5xx 时不判 res.ok 会把错误报成 JSON 解析失败，掩盖真实原因。
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status} ${path}${text ? '：' + text.slice(0, 160) : ''}`);
+      }
       const payload = await res.json();
       if (!payload.ok) throw new Error(payload.error?.message ?? 'request failed');
       return payload.value;
@@ -358,11 +367,16 @@ window.__ModuleLoader__.load({
       try { return sessions?.list?.getSnapshot?.()?.current; } catch { return undefined; }
     }
 
-    /** 等前台会话落位（openSession / selectPanel 之后 current 需要一两个渲染周期才更新）。 */
+    /** 等前台会话落位（openSession / selectPanel 之后 current 需要一两个渲染周期才更新）。
+     * 审计 A11：轮询必须有失效机制——新一轮等待发起后，旧的 setTimeout 链自动停轮询，
+     * 避免组件卸载后还在操作已失效的状态。 */
+    let sessionWaitToken = 0;
     function waitForSession(sessions, timeoutMs) {
+      const token = ++sessionWaitToken;
       return new Promise(resolve => {
         const deadline = Date.now() + timeoutMs;
         const tick = () => {
+          if (token !== sessionWaitToken) return resolve(undefined);
           const id = currentSessionId(sessions);
           if (id) return resolve(id);
           if (Date.now() > deadline) return resolve(undefined);
@@ -997,6 +1011,15 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'sw-root' },
         h('div', { className: 'sw-inner' },
+          // 审计 A2 配套：Host 把服务状态暴露在 /state 里，这里给出用户能看懂的提示。
+          state?.serverReady === false
+            ? h('div', { className: 'sw-banner', 'data-t': 'err', role: 'alert' },
+                'Host 数据通道未就绪：面板读不到数据。请重启桌面端；若重启后仍出现，查看 ~/.dsh/skills-workbench/debug.log')
+            : null,
+          state?.watcherDegraded === true
+            ? h('div', { className: 'sw-banner', 'data-t': 'warn' },
+                '技能目录监听不可用，已自动降级为 30 秒轮询同步（功能不受影响，同步稍慢）')
+            : null,
           h('header', { className: 'sw-hero sw-glass' },
             h('div', { className: 'sw-hero-main' },
               h('span', { className: 'sw-eyebrow' }, c.eyebrow),
@@ -1169,16 +1192,36 @@ window.__ModuleLoader__.load({
     /* ────────────────────────── 注册 ────────────────────────── */
     const PANEL_KEY = 'skills-workbench';
 
+    // 审计 A1：apply 里的任何异常都会冒泡到宿主 boot，可能让整个页面初始化中断
+    //（另一设备实测：team view ready() 20 秒超时、client 零日志）。分阶段兜错，
+    // 并把失败上报到 Host /diag —— WebView 的 console 用户拿不到，debug.log 才是排障通道。
+    function reportDiag(stage, error) {
+      const detail = error instanceof Error ? (error.stack || error.message) : String(error);
+      try {
+        void fetch(API + '/diag', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-skills-workbench': '1' },
+          body: JSON.stringify({ stage, detail: String(detail).slice(0, 600) }),
+        }).catch(() => { /* 上报失败就放弃，不再制造异常 */ });
+      } catch { /* ignore */ }
+      try { console.error('[skills-workbench]', stage, error); } catch { /* ignore */ }
+    }
+
     return {
       inject: ['slots', 'sessions', 'conversation', 'layout'],
       apply(ctx) {
-        ctx.effect(installStyles, 'skills-workbench: styles');
+        const stage = (name, fn) => {
+          try { fn(); } catch (error) { reportDiag(name, error); }
+        };
+
+        stage('styles', () => ctx.effect(installStyles, 'skills-workbench: styles'));
 
         // 记住"用户最后在会话视图里打开过的会话"：切到技能面板后 current 会变空，
         // 唤起时需要它。两条保障并存——订阅（即时）＋ 低频轮询（subscribe 不可用时兜底）。
-        const sessions = ctx.get('sessions');
-        const list = sessions?.list;
-        if (list?.getSnapshot !== undefined) {
+        stage('remember-session', () => {
+          const sessions = ctx.get('sessions');
+          const list = sessions?.list;
+          if (list?.getSnapshot === undefined) return;
           const remember = () => {
             const id = currentSessionId(sessions);
             if (id !== undefined && id !== null) rememberedSessionId = id;
@@ -1195,26 +1238,38 @@ window.__ModuleLoader__.load({
             const timer = setInterval(remember, 2000);
             return () => clearInterval(timer);
           }, 'skills-workbench: poll active session');
-        }
+        });
 
         const open = () => {
-          const layout = ctx.get('layout');
-          if (layout?.selectPanel) layout.selectPanel(PANEL_KEY);
+          try {
+            // 审计 B1：宿主文档口径是 ctx.layout.selectPanel(id)；ctx.get('layout')
+            // 保留为能力探测兜底（R29-A：探测能力，不赌 API 形态）。
+            const layout = ctx.layout ?? ctx.get?.('layout');
+            if (layout?.selectPanel) layout.selectPanel(PANEL_KEY);
+          } catch (error) { reportDiag('open-panel', error); }
         };
 
-        ctx.slots.inject('main', () => ctx.slots.register({
-          name: 'main',
-          key: PANEL_KEY,
-          id: 'skills-workbench-panel',
-          order: 20,
-        }, () => h(Panel, { ctx })));
+        stage('register-slots', () => {
+          ctx.slots.inject('main', () => ctx.slots.register({
+            name: 'main',
+            key: PANEL_KEY,
+            id: 'skills-workbench-panel',
+            order: 20,
+          // 审计 A5：透传宿主 owner props，面板才能拿到宿主上下文。
+          }, ownerProps => h(Panel, { ctx, ...ownerProps })));
 
-        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-          name: 'sidebar.panellist',
-          id: PANEL_KEY,
-          order: 60,
-          label: () => '技能工作台',
-        }, () => h(SidebarEntry, { open })));
+          ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+            name: 'sidebar.panellist',
+            id: PANEL_KEY,
+            order: 60,
+            // 审计 A6：label 由宿主以函数求值；硬编码中文在英文环境会原样显示。
+            label: () => (typeof navigator !== 'undefined'
+              && String(navigator.language || '').toLowerCase().startsWith('zh'))
+              ? '技能工作台' : 'Skills Workbench',
+          // 审计 A4：宿主调用 renderSlot('sidebar.panellist', { size, active }, { only: id })——
+          // 吞掉这些 props 会让图标尺寸恒为默认 30、选中态永远不亮。
+          }, ownerProps => h(SidebarEntry, { ...ownerProps, open })));
+        });
       },
     };
   },

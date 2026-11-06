@@ -46,12 +46,15 @@ const state = {
   roots: [],
   scanning: false,
   lastError: null,
+  serverReady: true,
+  watcherDegraded: false,
   trashCount: 0,
   trash: [],
 };
 
 let scanTimer = null;
 let scanPromise = null;
+let watchFallbackTimer = null;
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -174,8 +177,24 @@ function startWatching(roots, register) {
         if (name.includes('.tmp') || name.includes('~') || name.startsWith('.git')) return;
         scheduleRescan('watch:' + root.id);
       });
-      watcher.on('error', error => log(`watch error ${root.dir}: ${error?.message ?? error}`));
-      register(() => { try { watcher.close(); } catch { /* ignore */ } });
+      watcher.on('error', error => {
+        // 审计 A9：监听失败不能只记日志——「主动同步」会静默失效。
+        // 降级为 30s 轮询兜底，并把状态暴露给面板（watcherDegraded）。
+        log(`watch error ${root.dir}: ${error?.message ?? error}`);
+        try { watcher.close(); } catch { /* ignore */ }
+        if (watchFallbackTimer !== null) return;
+        state.watcherDegraded = true;
+        watchFallbackTimer = setInterval(() => scheduleRescan('watch-fallback'), 30000);
+        watchFallbackTimer.unref?.();
+      });
+      register(() => {
+        try { watcher.close(); } catch { /* ignore */ }
+        if (watchFallbackTimer !== null) {
+          clearInterval(watchFallbackTimer);
+          watchFallbackTimer = null;
+          state.watcherDegraded = false;
+        }
+      });
       log(`watching ${root.dir}`);
     } catch (error) {
       log(`watch unavailable ${root.dir}: ${error?.message ?? error}`);
@@ -267,8 +286,13 @@ async function describeSession(id) {
   return value;
 }
 
-/** 会话落盘根目录：`~/.dsh/sessions/<编码后的cwd>/session-<id>/session.v4.jsonl.zstd`。 */
-const SESSIONS_ROOT = path.join(os.homedir(), '.dsh', 'sessions');
+/** 会话落盘根目录：`<DSH_HOME>/sessions/<编码后的cwd>/session-<id>/session.v4.jsonl.zstd`。
+ * 审计 A7：必须尊重 DSH_HOME——自定义 DSH_HOME（如 .ds-bot）时 `~/.dsh/sessions` 不存在，
+ * 硬编码会让磁盘扫描恒为空，与 sessionPersistence（走宿主路径）互相矛盾。 */
+const SESSIONS_ROOT = path.join(
+  process.env.DSH_HOME || path.join(os.homedir(), '.dsh'),
+  'sessions',
+);
 
 /**
  * 直接扫描会话目录 —— 这是"事实来源"：会话在磁盘上就存在，
@@ -277,7 +301,7 @@ const SESSIONS_ROOT = path.join(os.homedir(), '.dsh', 'sessions');
  * （如 session-63a1c476）完全不出现在选择器里（实测缺陷）。
  * 目录 mtime 近似代表"最近打开/写入"，用于排序。全部为本地目录读，成本极低。
  */
-async function listSessionDirs() {
+async function listSessionDirs(limit = 40) {
   const out = [];
   let groups = [];
   try { groups = await fsp.readdir(SESSIONS_ROOT, { withFileTypes: true }); } catch { return out; }
@@ -295,7 +319,8 @@ async function listSessionDirs() {
     }
   }
   out.sort((a, b) => b.mtime - a.mtime);
-  return out;
+  // 审计 A8：会话很多时全量补详情会拖慢首屏，按 mtime 只保留最近 N 个（0 = 不截断）。
+  return limit > 0 ? out.slice(0, limit) : out;
 }
 
 /** 用有限并发补齐会话详情，避免 50+ 个会话串行读造成首屏卡顿。 */
@@ -405,6 +430,8 @@ async function handle(req, res, pathname) {
         trashCount: state.trashCount,
         trash: state.trash,
         stateDir: STATE_DIR,
+        serverReady: state.serverReady,
+        watcherDegraded: state.watcherDegraded,
       },
     });
   }
@@ -469,6 +496,16 @@ async function handle(req, res, pathname) {
     return json(res, 200, { ok: true, value: { name, dom, cat, revision: state.revision } });
   }
 
+  if (route === '/diag' && method === 'POST') {
+    // 审计 A1 配套：client 端 apply 各阶段的错误上报，落进 debug.log。
+    // WebView 的 renderer console 用户很难取，这是 client 半边排障的主通道。
+    const body = await readBody(req).catch(() => ({}));
+    const stage = String(body.stage ?? 'unknown').slice(0, 60);
+    const detail = String(body.detail ?? '').slice(0, 600);
+    log(`client-diag [${stage}] ${detail}`);
+    return json(res, 200, { ok: true, value: { received: true } });
+  }
+
   if (route === '/log' && method === 'GET') {
     let tail = '';
     try {
@@ -485,7 +522,10 @@ export function apply(ctx) {
   // 有 inject 声明后 webServer 必定就绪；保留兜底只为异常时留可查日志。
   const webServer = ctx.get('webServer');
   if (webServer === undefined) {
-    log('webServer 不可用：技能工作台面板缺少数据通道');
+    // 审计 A2：不能静默返回——client 拿不到数据只看到空白，用户无从排查。
+    // 状态暴露给 /state（路由注册成功时 client 可读），面板会显示「服务未就绪」。
+    state.serverReady = false;
+    log('webServer 不可用：技能工作台面板缺少数据通道（面板将显示服务未就绪）');
     return;
   }
   log(`applying: prefix route ${ROUTE_PREFIX}`);

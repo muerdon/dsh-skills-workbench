@@ -12,7 +12,7 @@ const PORT = process.argv[2] ?? '9208';
 const BASE = `http://127.0.0.1:${PORT}/skills-workbench/v1`;
 const NAME = 'sw-uninstall-test';
 const DIR = path.join(os.homedir(), '.agents', 'skills', NAME);
-const STATE_DIR = path.join(os.homedir(), '.dsh', 'skills-workbench');
+const STATE_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'skills-workbench');
 const TRASH_JSON = path.join(STATE_DIR, 'trash.json');
 
 let failures = 0;
