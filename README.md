@@ -62,6 +62,7 @@ plugin_manager install_bundle target=<本目录绝对路径>
 
 ## 常见问题
 
+- **安装时报 `ERR_PNPM_UNEXPECTED_STORE`**：这是宿主 profile 的 pnpm 环境问题，不是本插件的问题——插件包内不含任何 store 配置。pnpm 要求 store 与项目同盘才能硬链接：profile 的 `node_modules` 早期用旧 store（如 C 盘）链接，而项目现在位于另一盘符（如 D 盘）时 pnpm 期望 `D:\.pnpm-store`，两者不一致即被拒绝。修复：备份 profile 的 `package.json` / `pnpm-lock.yaml` / `cordis.patch.yml` 后，在 profile 目录执行 `pnpm install`（用当前 store 完整重建链接），再重新 `install_bundle`。若全局曾设过 `store-dir`，先用 `pnpm config get store-dir --global` 检查、`pnpm config delete store-dir --global` 清除后重试。
 - **安装后侧栏没有出现图标 / 启动后页面长时间空白**：确认安装返回的 `application` 是 `applied` 且已重启；仍无图标时查看宿主日志与 `<DSH_HOME 或 ~/.dsh>/skills-workbench/debug.log`。1.1.0 起客户端不再用 `immediately` 预取——这是个别宿主上「启动 20 秒超时 / 卡在初始化」的最大嫌疑；遇到此现象请升级到 1.1.0 并重启。
 - **面板显示「Host 数据通道未就绪」**：重启桌面端；仍出现说明 Host 半边路由未注册成功，查 `<DSH_HOME 或 ~/.dsh>/skills-workbench/debug.log` 里有没有 `applying: prefix route /skills-workbench/v1`。
 - **客户端出错怎么排查**：1.1.0 起客户端把初始化各阶段的失败上报到宿主日志（形如 `client-diag [styles] …`），在 `<DSH_HOME 或 ~/.dsh>/skills-workbench/debug.log` 里能直接看到 WebView 内部发生的错误，无需打开开发者工具。
