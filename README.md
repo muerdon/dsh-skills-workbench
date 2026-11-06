@@ -78,6 +78,19 @@ plugin_manager install_bundle target=<本目录绝对路径>
 - `data/reference.json` 只提供**通用分类体系与评分口径**，以及常见开源技能的名称→分类映射（供快速归类）。
 - 运行时的分类覆盖、回收站、日志全部写在 `<DSH_HOME 或 ~/.dsh>/skills-workbench/`，不会改动 DSH 的配置。
 
+## 发布前测试（维护者）
+
+本插件采用四道闸发布前测试体系，完整清单见 `tools/release-checklist-发布前测试清单.md`：
+
+| 闸 | 内容 | 命令 |
+|---|---|---|
+| 1 | 静态契约（模块 id ↔ 包名、`exports["./client"]` 配对、engines 非精确锁、包内无 store 配置、SHA256 全量校验…） | `node tools/pre-release-check.mjs --gates 1`（构建后自动跑，失败即中止构建） |
+| 2 | 仿真宿主：stub 宿主真实加载 client.js / 真实走 Host handler | `node tools/pre-release-check.mjs --gates 2` |
+| 3 | 端到端：本地真实 HTTP 实例跑扫描/卸载/恢复/API 全链路 | `node tools/pre-release-check.mjs --gates 3` |
+| 4 | 真机跨宿主：冷启动稳定性 × N + 卸载重装往返体检 + 人工核对 | `tools/coldstart-check.ps1` + `test/install-roundtrip.mjs` |
+
+核心教训：**本机 link 安装能跑 ≠ 发布形态能跑**。凡包名、路径、环境变量在构建分发时会变化的差异，都必须有闸门在发布前暴露。
+
 ## 文件校验
 
 同目录下 `SHA256SUMS.txt` 列出了每个文件的 SHA-256，可用于校验分发完整性：
